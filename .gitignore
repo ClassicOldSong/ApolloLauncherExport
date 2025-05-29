@@ -1,0 +1,12 @@
+build
+dist
+profiles
+venv
+export
+.venv
+__pycache__
+.DS_Store
+
+*.zip
+config.ini
+*.log
