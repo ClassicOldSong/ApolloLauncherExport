@@ -4,7 +4,7 @@
 # Derived from:
 # https://github.com/Jetup13/Retroid-Pocket-3-Plus-Wiki/blob/main/Files/Backup/MoonlightFileGenerator.py
 #
-# Generate Daijishō (.art) / ES-DE launcher files (.artes) for Apollo–Artemis.
+# Generate Pegasus Frontend (.artp) / Daijishō (.art) / ES-DE launcher files (.artes) for Apollo–Artemis.
 # Python 3.8+ -- only stdlib (tkinter, configparser, json, shutil, pathlib).
 
 import json, re, sys, shutil, os, subprocess
@@ -51,7 +51,7 @@ def parse_conf(conf_path: Path):
 
 
 def collect_data(apps_json: Path, state_json: Path):
-    """Return {game_name: uuid} (skip missing UUID) and host_uuid."""
+    """Return {game_name: {"uuid": uuid, "app_image": app_image_path}} (skip missing UUID) and host_uuid."""
     with state_json.open(encoding="utf-8") as f:
         host_uuid = json.load(f)["root"]["uniqueid"]
 
@@ -60,8 +60,9 @@ def collect_data(apps_json: Path, state_json: Path):
         for app in json.load(f)["apps"]:
             name  = app.get("name")
             uuid  = app.get("uuid")
+            app_image = app.get("image-path") # Get app-image
             if name and uuid:            # skip orphan entries
-                app_map[name.lstrip()] = uuid
+                app_map[name.lstrip()] = {"uuid": uuid, "app_image": app_image}
 
     return app_map, host_uuid
 
@@ -90,7 +91,8 @@ def open_directory(path: Path):
 
 
 def generate_daijishou(app_map, host_uuid, host_name, out_dir):
-    for name, uuid in app_map.items():
+    for name, game_data in app_map.items():
+        uuid = game_data["uuid"]
         (out_dir / f"{sanitize(name)}.art").write_text(
             f"# Daijishou Player Template\n[app_uuid] {uuid}\n", encoding="utf-8"
         )
@@ -130,7 +132,8 @@ def generate_daijishou(app_map, host_uuid, host_name, out_dir):
 
 
 def generate_esde(app_map, host_uuid, host_name, out_dir):
-    for name, uuid in app_map.items():
+    for name, game_data in app_map.items():
+        uuid = game_data["uuid"]
         (out_dir / f"{sanitize(name)}.artes").write_text(uuid, encoding="utf-8")
 
     (out_dir / "Apollo.uuid").write_text(host_uuid, encoding="utf-8")
@@ -159,6 +162,56 @@ def generate_esde(app_map, host_uuid, host_name, out_dir):
     open_directory(out_dir)
 
 
+def generate_pegasus(app_map, host_uuid, host_name, out_dir, config_path: Path):
+    """Generates Pegasus Frontend metadata files."""
+    covers_dir = config_path.parent / "assets"
+    # Create .artp files for each game
+    for name, game_data in app_map.items():
+        uuid = game_data["uuid"]
+        app_image_path_str = game_data.get("app_image")
+
+        (out_dir / f"{uuid}.artp").write_text(f"[metadata]\napp_name={name}\napp_uuid={uuid}\nhost_uuid={host_uuid}\n", encoding="utf-8")
+
+        if app_image_path_str:
+            app_image_path = Path(app_image_path_str)
+            if not app_image_path.is_absolute():
+                app_image_path = covers_dir / app_image_path
+            
+            if app_image_path.exists() and app_image_path.is_file():
+                media_game_dir = out_dir / "media" / uuid
+                media_game_dir.mkdir(parents=True, exist_ok=True)
+                dest_path = media_game_dir / "boxFront.png"
+                try:
+                    shutil.copy2(app_image_path, dest_path)
+                except Exception as e:
+                    print(f"Skipping image copy for {name} due to error: {e}")
+            else:
+                print(f"Skipping image for {name}: {app_image_path_str} not found or not a file.")
+
+
+    # Create metadata.pegasus.txt
+    metadata_content = []
+    metadata_content.append(f"collection: {host_name}")
+    metadata_content.append("shortname: artemis") # Consistent with other exports
+    metadata_content.append("extension: artp")
+    
+    # Note: {{file.basename}} is for Pegasus to replace, host_uuid is embedded by Python
+    launch_command = f"am start -n com.limelight.noir/com.limelight.ShortcutTrampoline --es UUID {host_uuid} --es AppUUID {{file.basename}}"
+    metadata_content.append(f"launch: {launch_command}")
+    metadata_content.append("") # Empty line for separation
+
+    for name, game_data in app_map.items():
+        uuid = game_data["uuid"]
+        metadata_content.append(f"game: {name}")
+        metadata_content.append(f"file: {uuid}.artp")
+        metadata_content.append("") # Empty line after each game entry
+    
+    (out_dir / "metadata.pegasus.txt").write_text("\n".join(metadata_content).strip(), encoding="utf-8")
+
+    messagebox.showinfo("Done", f"Pegasus Frontend files (.artp, metadata.pegasus.txt) created in '{out_dir.name}'!")
+    open_directory(out_dir)
+
+
 # ─── GUI ────────────────────────────────────────────────────────────────────
 def choose_and_run(mode: str):
     conf_path = filedialog.askopenfilename(
@@ -177,20 +230,24 @@ def choose_and_run(mode: str):
 
     ensure_out_dir(out_dir)
 
-    if mode == "daijishou":
-        generate_daijishou(app_map, host_uuid, host_name, out_dir)
-    else:
+    if mode == "Pegasus":
+        generate_pegasus(app_map, host_uuid, host_name, out_dir, Path(conf_path).parent)
+    elif mode == "ES-DE":
         generate_esde(app_map, host_uuid, host_name, out_dir)
+    else: # daijishou
+        generate_daijishou(app_map, host_uuid, host_name, out_dir)
 
 
 def main():
     root = Tk(); root.title("Apollo Launcher Export")
     Label(root, text="Generate launcher files for:").pack(pady=10)
 
-    Button(root, text="Daijishō", width=28,
-           command=lambda: choose_and_run("daijishou")).pack(pady=4)
+    Button(root, text="Pegasus", width=28,
+           command=lambda: choose_and_run("Pegasus")).pack(pady=4)
     Button(root, text="ES-DE",   width=28,
-           command=lambda: choose_and_run("esde")).pack(pady=4)
+           command=lambda: choose_and_run("ES-DE")).pack(pady=4)
+    Button(root, text="Daijishō", width=28,
+           command=lambda: choose_and_run("Daijishō")).pack(pady=4)
 
     root.mainloop()
 

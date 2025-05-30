@@ -1,14 +1,15 @@
 # ApolloLauncherExport
 
-A Python script to generate launcher files for [Daijishō](https://github.com/TapiocaFox/Daijishou) (Android) and [ES-DE](https://www.es-de.org/) (EmulationStation Desktop Edition) to stream PC games via [Apollo](https://github.com/ClassicOldSong/Apollo). Artemis is used as the client (referred to as Apollo/Artemis in this script's context for the client-side launchers it generates).
+A Python script to generate launcher files for [Pegasus Frontend](https://pegasus-frontend.org/), [Daijishō](https://github.com/TapiocaFox/Daijishou) (Android) and [ES-DE](https://www.es-de.org/) (EmulationStation Desktop Edition) to stream PC games via [Apollo](https://github.com/ClassicOldSong/Apollo). Artemis is used as the client (referred to as Apollo/Artemis in this script's context for the client-side launchers it generates).
 
 This script reads your Apollo server's application list and host details to create the necessary files for these frontends, enabling a seamless game launching experience. **This script is specifically for Apollo and Artemis and does not support the original Sunshine and Moonlight.**
 
 ## Features
 
+*   Generates `.artp` files and `metadata.pegasus.txt` for Pegasus Frontend, together with app image(if defined).
 *   Generates `.art` files (per-game launcher files) and an `Artemis.json` platform/player configuration file for Daijishō.
 *   Generates `.artes` files (per-game launcher files), an `Apollo.uuid` (host UUID file), `es_systems.xml` (system configuration), and `es_find_rules.xml` (emulator configuration) for ES-DE.
-*   Parses Apollo server's `apps.json` (application list) and `sunshine_state.json` (host UUID, a filename potentially retained from Sunshine) via a simple `.conf` helper file.
+*   Parses Apollo server's `apps.json` and `sunshine_state.json` from `sunshine.conf` file.
 *   Provides a basic graphical user interface (GUI) to select the configuration file and choose the target frontend (Daijishō or ES-DE).
 *   Outputs organized files into an `export/<frontend_name>/<host_name>/` directory.
 
@@ -45,6 +46,19 @@ This script needs to know where your Apollo server's `apps.json` and `sunshine_s
     *   A confirmation message ("Done! Daijishō files (.art) created!" or "Done! ES-DE files (.artes) created!") will appear.
 
 ## Frontend Configuration
+
+### Pegasus Frontend
+
+*   Run the script and select "Pegasus".
+*   Select your `sunshine.conf` file.
+*   A new folder will be created under `export/pegasus/<Your Host Name>/`.
+*   This folder contains:
+    *   `metadata.pegasus.txt`: This is the main metadata file for Pegasus. It defines a collection for your streamed games, using your computer's name (from `sunshine.conf`) as the collection title. It also lists all your games and links them to their respective `.artp` files.
+    *   A series of `.artp` files, one for each game, named with the game's UUID (e.g., `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.artp`). Each file contains the game's name and its UUID. Pegasus uses the UUID from the filename (`{file.basename}`) to launch the game via Moonlight.
+*   **Setup in Pegasus Frontend:**
+    1.  Copy the generated folder (e.g., `<Your Host Name>`) into one of your Pegasus game directories.
+    2.  In Pegasus, go to `Settings` -> `Set game directories` and ensure the path to this folder (or its parent) is added.
+    3.  Pegasus should now find your games. The launch command is configured to use `am start` to launch Moonlight directly with the correct host and game UUIDs.
 
 ### Daijishō
 
