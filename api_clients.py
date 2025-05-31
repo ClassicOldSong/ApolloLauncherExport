@@ -1,6 +1,4 @@
 import json
-from pathlib import Path
-import shutil # For copyfileobj in download_image, though download_image is now in utils
 from datetime import datetime, timezone
 import difflib
 from tkinter import messagebox # For fetch_igdb_app_access_token
@@ -241,6 +239,12 @@ def fetch_igdb_metadata_for_game(game_name: str, client_id: str, app_access_toke
 
         # Store image URLs for later download by generator
         image_urls = {}
+        
+        # Check if we should skip image fetching entirely
+        if "_skip_images" in steamgriddb_fetched_assets:
+            results_queue.put({"status": "asset_update", "game_name": game_name, "asset_info": "IGDB: Skipping image fetching for existing ROM file."})
+            # Return only textual metadata, no image URLs
+            return pegasus_metadata
         
         # Check if SteamGridDB already has cover-like assets
         has_steamgriddb_boxfront = False

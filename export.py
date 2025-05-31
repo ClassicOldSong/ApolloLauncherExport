@@ -34,7 +34,7 @@ except ImportError:
     print("Warning: 'igdb-api-python' library not installed or 'requests' is missing. IGDB functionality will require setup.")
     IGDBWrapper = None
 
-def choose_and_run(root, mode: str, api_key_label_widget=None, apollo_conf_label_widget=None, igdb_label_widget=None, steamgriddb_var=None, igdb_var=None):
+def choose_and_run(root, mode: str, api_key_label_widget=None, apollo_conf_label_widget=None, igdb_label_widget=None, steamgriddb_var=None, igdb_var=None, skip_existing_var=None):
     apollo_conf_path_str = app_config.get("apollo_conf_path")
     config_file_path_obj = None
 
@@ -142,7 +142,8 @@ def choose_and_run(root, mode: str, api_key_label_widget=None, apollo_conf_label
 
         generate_pegasus(root, app_map, host_uuid, host_name, out_dir, config_file_path_obj, 
                          use_steamgriddb, current_steamgriddb_api_key, 
-                         fetch_igdb_enabled_for_run, current_igdb_client_id, current_igdb_app_access_token)
+                         fetch_igdb_enabled_for_run, current_igdb_client_id, current_igdb_app_access_token,
+                         skip_existing_var.get() if skip_existing_var else False)
     elif mode == "ES-DE":
         generate_esde(app_map, host_uuid, host_name, out_dir)
     else: # Daijishō
@@ -152,7 +153,6 @@ def choose_and_run(root, mode: str, api_key_label_widget=None, apollo_conf_label
 def main():
     root = Tk()
     root.title("Apollo Launcher Export")
-    Label(root, text="Generate launcher files for:").pack(pady=10)
 
     # --- Configuration Management UI ---
     from tkinter import Frame
@@ -166,7 +166,7 @@ def main():
     lbl_apollo_conf_text.pack(side="left")
     lbl_apollo_conf_path_val = Label(apollo_path_frame, text="Not Set", fg="blue", width=40, anchor="w")
     lbl_apollo_conf_path_val.pack(side="left", expand=True, fill="x")
-    btn_set_apollo_path = Button(apollo_path_frame, text="Set/Change", 
+    btn_set_apollo_path = Button(apollo_path_frame, text="Set", 
                                  command=lambda: prompt_and_save_apollo_conf_path(lbl_apollo_conf_path_val))
     btn_set_apollo_path.pack(side="left")
 
@@ -177,7 +177,7 @@ def main():
     lbl_api_key_text.pack(side="left")
     lbl_api_key_val = Label(api_key_frame, text="Not Set", fg="blue", width=40, anchor="w")
     lbl_api_key_val.pack(side="left", expand=True, fill="x")
-    btn_set_api_key = Button(api_key_frame, text="Set/Change", 
+    btn_set_api_key = Button(api_key_frame, text="Set", 
                              command=lambda: prompt_and_save_api_key(root, lbl_api_key_val))
     btn_set_api_key.pack(side="left")
 
@@ -188,7 +188,7 @@ def main():
     lbl_igdb_creds_text.pack(side="left")
     lbl_igdb_creds_val = Label(igdb_creds_frame, text="Client ID: Not Set | Token: Not Set", fg="blue", width=40, anchor="w")
     lbl_igdb_creds_val.pack(side="left", expand=True, fill="x")
-    btn_set_igdb_creds = Button(igdb_creds_frame, text="Set/Change",
+    btn_set_igdb_creds = Button(igdb_creds_frame, text="Set",
                                 command=lambda: prompt_and_set_igdb_credentials(root, lbl_igdb_creds_val))
     btn_set_igdb_creds.pack(side="left")
 
@@ -210,13 +210,21 @@ def main():
                                 variable=igdb_var)
     igdb_checkbox.pack(anchor="w", padx=20)
 
+    # Skip existing checkbox
+    skip_existing_var = BooleanVar()
+    skip_existing_checkbox = Checkbutton(options_frame, text="Skip image fetching for existing ROM files (still update metadata)", 
+                                        variable=skip_existing_var)
+    skip_existing_checkbox.pack(anchor="w", padx=20)
+
+    Label(root, text="Generate launcher files for:").pack(pady=10)
+
     # --- Action Buttons ---
     Button(root, text="Pegasus", width=28,
-           command=lambda: choose_and_run(root, "Pegasus", lbl_api_key_val, lbl_apollo_conf_path_val, lbl_igdb_creds_val, steamgriddb_var, igdb_var)).pack(pady=4)
+           command=lambda: choose_and_run(root, "Pegasus", lbl_api_key_val, lbl_apollo_conf_path_val, lbl_igdb_creds_val, steamgriddb_var, igdb_var, skip_existing_var)).pack(pady=4)
     Button(root, text="ES-DE", width=28,
-           command=lambda: choose_and_run(root, "ES-DE", api_key_label_widget=None, apollo_conf_label_widget=lbl_apollo_conf_path_val, igdb_label_widget=None)).pack(pady=4)
+           command=lambda: choose_and_run(root, "ES-DE", api_key_label_widget=None, apollo_conf_label_widget=lbl_apollo_conf_path_val, igdb_label_widget=None, skip_existing_var=skip_existing_var)).pack(pady=4)
     Button(root, text="Daijishō", width=28,
-           command=lambda: choose_and_run(root, "Daijishō", api_key_label_widget=None, apollo_conf_label_widget=lbl_apollo_conf_path_val, igdb_label_widget=None)).pack(pady=4)
+           command=lambda: choose_and_run(root, "Daijishō", api_key_label_widget=None, apollo_conf_label_widget=lbl_apollo_conf_path_val, igdb_label_widget=None, skip_existing_var=skip_existing_var)).pack(pady=4)
 
     # Load initial config and update UI
     load_config()

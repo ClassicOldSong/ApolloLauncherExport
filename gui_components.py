@@ -1,4 +1,4 @@
-from tkinter import (Tk, Button, Label, filedialog, messagebox, Frame, simpledialog, Toplevel, Entry)
+from tkinter import (Button, Label, filedialog, messagebox, Frame, simpledialog, Toplevel, Entry)
 import webbrowser
 from pathlib import Path
 

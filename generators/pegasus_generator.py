@@ -68,14 +68,74 @@ def _generate_pegasus_metadata_file(app_map, host_uuid, host_name, out_dir, igdb
     (out_dir / "metadata.pegasus.txt").write_text("\n".join(metadata_content).strip(), encoding="utf-8")
     print("Pegasus metadata file generated.")
 
+def _parse_existing_metadata(out_dir):
+    """Parse existing metadata.pegasus.txt file to retain previous metadata."""
+    metadata_file = out_dir / "metadata.pegasus.txt"
+    existing_metadata_cache = {}
+    
+    if not metadata_file.exists():
+        return existing_metadata_cache
+    
+    try:
+        content = metadata_file.read_text(encoding="utf-8")
+        lines = content.split('\n')
+        
+        current_game = None
+        current_file = None
+        current_metadata = {}
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                # End of game section, store if we have both game and file
+                if current_game and current_file and current_metadata:
+                    # Extract UUID from file name (remove .artp extension)
+                    uuid = current_file.replace('.artp', '')
+                    existing_metadata_cache[uuid] = current_metadata.copy()
+                current_game = None
+                current_file = None
+                current_metadata = {}
+                continue
+                
+            if line.startswith('game: '):
+                current_game = line[6:]  # Remove 'game: '
+            elif line.startswith('file: '):
+                current_file = line[6:]  # Remove 'file: '
+            elif ':' in line and current_game:
+                # This is metadata for the current game
+                key, value = line.split(':', 1)
+                key = key.strip()
+                value = value.strip()
+                
+                # Skip collection-level metadata
+                if key not in ['collection', 'shortname', 'extension', 'launch']:
+                    current_metadata[key] = value
+        
+        # Handle last game if file doesn't end with empty line
+        if current_game and current_file and current_metadata:
+            uuid = current_file.replace('.artp', '')
+            existing_metadata_cache[uuid] = current_metadata.copy()
+            
+        print(f"Parsed existing metadata for {len(existing_metadata_cache)} games.")
+        
+    except Exception as e:
+        print(f"Error parsing existing metadata.pegasus.txt: {e}")
+    
+    return existing_metadata_cache
+
 def _metadata_fetching_worker(app_map, steamgriddb_api_key, results_queue, cancel_event, 
-                            fetch_igdb_enabled, igdb_client_id, igdb_app_access_token):
+                            fetch_igdb_enabled, igdb_client_id, igdb_app_access_token, skip_existing, out_dir):
     """Worker function to fetch metadata and asset URLs for all games."""
     total_games = len(app_map)
     processed_games = 0
     errors_occurred = False
     steamgriddb_assets_cache = {}
     igdb_metadata_cache = {}
+    
+    # Parse existing metadata if skip_existing is enabled (as fallback)
+    existing_metadata_cache = {}
+    if skip_existing:
+        existing_metadata_cache = _parse_existing_metadata(out_dir)
     
     print(f"[Metadata Thread] Starting metadata fetching for {total_games} games.")
 
@@ -93,11 +153,24 @@ def _metadata_fetching_worker(app_map, steamgriddb_api_key, results_queue, cance
         })
 
         uuid = game_data["uuid"]
+        
+        # Check if we should skip fetching images for this game
+        skip_images_for_this_game = False
+        if skip_existing:
+            artp_file_path = out_dir / f"{uuid}.artp"
+            if artp_file_path.exists():
+                skip_images_for_this_game = True
+                results_queue.put({
+                    "status": "asset_update", 
+                    "game_name": name, 
+                    "asset_info": f"Skipping image fetching for existing ROM file."
+                })
+                print(f"[Metadata Thread] Skipping image fetching for {name} - ROM file already exists.")
 
         try:
-            # Fetch SteamGridDB asset URLs
+            # Fetch SteamGridDB asset URLs (skip if we're skipping images for this game)
             steamgriddb_assets_info = {}
-            if steamgriddb_api_key:
+            if not skip_images_for_this_game and steamgriddb_api_key:
                 steamgriddb_assets_info = fetch_steamgriddb_assets_for_game(name, steamgriddb_api_key, results_queue, cancel_event)
                 if steamgriddb_assets_info:
                     steamgriddb_assets_cache[uuid] = steamgriddb_assets_info
@@ -106,13 +179,22 @@ def _metadata_fetching_worker(app_map, steamgriddb_api_key, results_queue, cance
                 print(f"[Metadata Thread] Cancellation detected after SteamGridDB fetch for {name}.")
                 break
 
-            # Fetch IGDB metadata and image URLs
+            # Fetch IGDB metadata - always try for textual metadata, control image fetching
             if fetch_igdb_enabled:
                 if igdb_client_id and igdb_app_access_token and IGDBWrapper:
+                    # For games where we're skipping images, pass a special marker to indicate we have "all images"
+                    # This will make IGDB skip image fetching but still get textual metadata
+                    steamgriddb_for_igdb = steamgriddb_assets_info if not skip_images_for_this_game else {"_skip_images": True}
+                    
                     igdb_data = fetch_igdb_metadata_for_game(name, igdb_client_id, igdb_app_access_token, 
-                                                 results_queue, cancel_event, steamgriddb_assets_info)
+                                                 results_queue, cancel_event, steamgriddb_for_igdb)
                     if igdb_data:
-                        igdb_metadata_cache[uuid] = igdb_data
+                        # If we're skipping images, remove image_urls from the data
+                        if skip_images_for_this_game and "image_urls" in igdb_data:
+                            igdb_data_without_images = {k: v for k, v in igdb_data.items() if k != "image_urls"}
+                            igdb_metadata_cache[uuid] = igdb_data_without_images
+                        else:
+                            igdb_metadata_cache[uuid] = igdb_data
                         
                         # Send textual metadata (excluding image_urls) for immediate use
                         igdb_text_data = {k: v for k, v in igdb_data.items() if k != "image_urls"}
@@ -123,15 +205,47 @@ def _metadata_fetching_worker(app_map, steamgriddb_api_key, results_queue, cance
                                 "game_name": name,
                                 "data": igdb_text_data
                             })
+                    elif skip_images_for_this_game and uuid in existing_metadata_cache:
+                        # Fallback to existing metadata if IGDB call failed and we're skipping images
+                        igdb_metadata_cache[uuid] = existing_metadata_cache[uuid]
+                        results_queue.put({
+                            "status": "igdb_text_data_ready",
+                            "game_uuid": uuid,
+                            "game_name": name,
+                            "data": existing_metadata_cache[uuid]
+                        })
+                        print(f"[Metadata Thread] Used existing metadata for {name} (IGDB call failed)")
                 else:
-                    results_queue.put({"status": "asset_update", "game_name": name, "asset_info": "Skipping IGDB: Not configured or library missing."})
-                    print(f"[Metadata Thread] Skipping IGDB metadata for {name}: Not configured or library missing.")
+                    # IGDB not available, try to use existing metadata if skipping images
+                    if skip_images_for_this_game and uuid in existing_metadata_cache:
+                        igdb_metadata_cache[uuid] = existing_metadata_cache[uuid]
+                        results_queue.put({
+                            "status": "igdb_text_data_ready",
+                            "game_uuid": uuid,
+                            "game_name": name,
+                            "data": existing_metadata_cache[uuid]
+                        })
+                        print(f"[Metadata Thread] Used existing metadata for {name} (IGDB not configured)")
+                    else:
+                        results_queue.put({"status": "asset_update", "game_name": name, "asset_info": "Skipping IGDB: Not configured or library missing."})
+                        print(f"[Metadata Thread] Skipping IGDB metadata for {name}: Not configured or library missing.")
 
         except Exception as e:
             error_msg = f"[Metadata Thread] Error processing metadata for {name}: {e}"
             results_queue.put({"status": "asset_update", "game_name": name, "asset_info": error_msg})
             print(error_msg)
             errors_occurred = True
+            
+            # If there was an error and we're skipping images, try to use existing metadata
+            if skip_images_for_this_game and uuid in existing_metadata_cache:
+                igdb_metadata_cache[uuid] = existing_metadata_cache[uuid]
+                results_queue.put({
+                    "status": "igdb_text_data_ready",
+                    "game_uuid": uuid,
+                    "game_name": name,
+                    "data": existing_metadata_cache[uuid]
+                })
+                print(f"[Metadata Thread] Used existing metadata for {name} (due to error)")
         
         if cancel_event.is_set():
             print("[Metadata Thread] Cancellation detected after processing game:", name)
@@ -214,7 +328,7 @@ def _download_assets_worker(app_map, media_base_dir, steamgriddb_assets_cache, i
     print("[Download Thread] Asset downloads complete.")
 
 def generate_pegasus(root, app_map, host_uuid, host_name, out_dir, config_path, use_steamgriddb, steamgriddb_api_key, 
-                     fetch_igdb_enabled, igdb_client_id, igdb_app_access_token):
+                     fetch_igdb_enabled, igdb_client_id, igdb_app_access_token, skip_existing=False):
     """Handles Pegasus generation, with threaded asset fetching if enabled."""
 
     # --- Part 1: Generate .artp files and local boxFront (main thread) ---
@@ -288,7 +402,7 @@ def generate_pegasus(root, app_map, host_uuid, host_name, out_dir, config_path, 
         progress_dialog, lbl_game_status, lbl_asset_status = show_progress_dialog(root, cancel_event, len(app_map))
         results_q = queue.Queue()
         
-        # Pass the explicit IGDB parameters to the worker
+        # Pass the explicit IGDB parameters and skip_existing to the worker
         fetch_thread = threading.Thread(target=_metadata_fetching_worker, 
                                         args=(app_map, 
                                               steamgriddb_api_key if use_steamgriddb else None, # Pass key only if use_steamgriddb
@@ -296,7 +410,9 @@ def generate_pegasus(root, app_map, host_uuid, host_name, out_dir, config_path, 
                                               cancel_event,
                                               fetch_igdb_enabled, # Use the parameter passed to generate_pegasus
                                               igdb_client_id,    # Use the parameter
-                                              igdb_app_access_token # Use the parameter
+                                              igdb_app_access_token, # Use the parameter
+                                              skip_existing,    # Pass the skip_existing parameter
+                                              out_dir           # Pass out_dir for checking .artp files
                                               ))
         fetch_thread.start()
 
