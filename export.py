@@ -17,7 +17,7 @@ from gui_components import (
     update_apollo_path_label, update_api_key_label, update_igdb_credentials_label,
     prompt_and_save_apollo_conf_path, prompt_and_save_api_key, prompt_and_set_igdb_credentials
 )
-from api_clients import check_steamgriddb_key_validity, check_igdb_token_validity
+from api_clients import MetadataFetcher, check_steamgriddb_key_validity, check_igdb_token_validity
 from generators import generate_daijishou, generate_esde, generate_pegasus
 
 try:
@@ -74,6 +74,8 @@ def choose_and_run(root, mode: str, api_key_label_widget=None, apollo_conf_label
     fetch_igdb_enabled_for_run = False
     current_igdb_client_id = app_config.get("igdb_client_id")
     current_igdb_app_access_token = app_config.get("igdb_app_access_token")
+
+    metadata_fetcher = None # Initialize metadata_fetcher
 
     if mode == "Pegasus":
         if not requests:
@@ -140,9 +142,16 @@ def choose_and_run(root, mode: str, api_key_label_widget=None, apollo_conf_label
             else:
                 print("IGDB metadata fetching disabled (checkbox unchecked).")
 
-        generate_pegasus(root, app_map, host_uuid, host_name, out_dir, config_file_path_obj, 
-                         use_steamgriddb, current_steamgriddb_api_key, 
-                         fetch_igdb_enabled_for_run, current_igdb_client_id, current_igdb_app_access_token,
+            # Create MetadataFetcher instance if any fetching is enabled
+            if use_steamgriddb or fetch_igdb_enabled_for_run:
+                metadata_fetcher = MetadataFetcher(
+                    steamgriddb_api_key=current_steamgriddb_api_key if use_steamgriddb else None,
+                    igdb_client_id=current_igdb_client_id if fetch_igdb_enabled_for_run else None,
+                    igdb_app_access_token=current_igdb_app_access_token if fetch_igdb_enabled_for_run else None
+                )
+
+        generate_pegasus(root, app_map, host_uuid, host_name, out_dir, config_file_path_obj,
+                         metadata_fetcher, # Pass the instance
                          skip_existing_var.get() if skip_existing_var else False)
     elif mode == "ES-DE":
         generate_esde(app_map, host_uuid, host_name, out_dir)
