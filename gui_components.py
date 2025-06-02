@@ -147,6 +147,16 @@ def update_igdb_credentials_label(label_widget):
 
     label_widget.config(text=f"{client_id_display} | {token_display}")
 
+def update_host_name_label(label_widget, host_name_str):
+    """Updates the host name display label."""
+    if host_name_str:
+        display_text = f"Generate launcher files for: {host_name_str}"
+    elif host_name_str == "": # Explicitly empty, which shouldn't happen for hostname
+        display_text = "Generate launcher files for: <empty>"
+    else:
+        display_text = "Generate launcher files for: Not Set"
+    label_widget.config(text=display_text)
+
 # --- Functions to prompt and save settings (now in GUI or main app logic) ---
 # These functions usually involve dialogs (from this file) but also saving (config_manager)
 # and validation (api_clients). They are part of the UI interaction flow.

@@ -15,7 +15,8 @@ from utils import BASE_DIR, parse_conf, collect_data, ensure_out_dir
 from config_manager import app_config, load_config
 from gui_components import (
     update_apollo_path_label, update_api_key_label, update_igdb_credentials_label,
-    prompt_and_save_apollo_conf_path, prompt_and_save_api_key, prompt_and_set_igdb_credentials
+    prompt_and_save_apollo_conf_path, prompt_and_save_api_key, prompt_and_set_igdb_credentials,
+    update_host_name_label
 )
 from api_clients import MetadataFetcher, check_steamgriddb_key_validity, check_igdb_token_validity
 from generators import generate_daijishou, generate_esde, generate_pegasus, generate_generic
@@ -34,36 +35,24 @@ except ImportError:
     print("Warning: 'igdb-api-python' library not installed or 'requests' is missing. IGDB functionality will require setup.")
     IGDBWrapper = None
 
-def choose_and_run(root, mode: str, api_key_label_widget=None, apollo_conf_label_widget=None, igdb_label_widget=None, steamgriddb_var=None, igdb_var=None, skip_existing_var=None):
-    apollo_conf_path_str = app_config.get("apollo_conf_path")
-    config_file_path_obj = None
+def choose_and_run(root, mode: str, 
+                   # Parsed Apollo data:
+                   apps_json, state_json, host_name, config_file_path_obj, 
+                   # Other params:
+                   api_key_label_widget=None, igdb_label_widget=None, 
+                   steamgriddb_var=None, igdb_var=None, skip_existing_var=None):
+    # Apollo config is now parsed beforehand and data is passed in.
+    # The config_file_path_obj is passed for Pegasus generator.
+    # host_name is passed directly.
+    # apps_json and state_json are passed directly.
 
-    # 1. Validate/Get Apollo Config Path
-    if apollo_conf_path_str:
-        temp_path = Path(apollo_conf_path_str)
-        if temp_path.exists() and temp_path.is_file():
-            config_file_path_obj = temp_path
-        else:
-            messagebox.showwarning("Invalid Apollo Config", f"Saved path {apollo_conf_path_str} is invalid. Please select a new one.")
-    
-    if not config_file_path_obj:
-        if not apollo_conf_label_widget:
-            messagebox.showerror("Error", "Apollo config UI element missing.")
-            return
-        prompt_and_save_apollo_conf_path(apollo_conf_label_widget)
-        apollo_conf_path_str = app_config.get("apollo_conf_path")
-        if apollo_conf_path_str and Path(apollo_conf_path_str).exists():
-            config_file_path_obj = Path(apollo_conf_path_str)
-        else:
-            messagebox.showerror("Operation Cancelled", "Apollo config file not set. Cannot proceed.")
-            return
-
-    # Proceed with the validated config_file_path_obj
-    apps_json, state_json, host_name = parse_conf(config_file_path_obj)
     app_map, host_uuid = collect_data(apps_json, state_json)
     if not app_map:
         messagebox.showerror("No games", "No apps with UUID found in apps.json")
         return
+
+    # Host name label is updated externally now.
+    # print(f"Debug: Processing for host: {host_name} in mode: {mode}")
 
     out_dir = BASE_DIR / mode / host_name
     ensure_out_dir(out_dir)
@@ -154,16 +143,114 @@ def choose_and_run(root, mode: str, api_key_label_widget=None, apollo_conf_label
                          metadata_fetcher, # Pass the instance
                          skip_existing_var.get() if skip_existing_var else False)
     elif mode == "ES-DE":
-        generate_esde(app_map, host_uuid, host_name, out_dir)
+        generate_esde(app_map, host_uuid, host_name, out_dir, skip_existing_var.get() if skip_existing_var else False)
     elif mode == "Daijishō":
-        generate_daijishou(app_map, host_uuid, host_name, out_dir)
+        generate_daijishou(app_map, host_uuid, host_name, out_dir, skip_existing_var.get() if skip_existing_var else False)
     elif mode == "Generic":
-        generate_generic(app_map, host_uuid, host_name, out_dir)
+        generate_generic(app_map, host_uuid, host_name, out_dir, skip_existing_var.get() if skip_existing_var else False)
 
 
 def main():
     root = Tk()
     root.title("Apollo Launcher Export")
+
+    parsed_apollo_data = {
+        "apps_json": None,
+        "state_json": None,
+        "host_name": None,
+        "config_file_path_obj": None,
+        "is_valid": False
+    }
+
+    # --- Helper function to parse Apollo config and update UI ---
+    def _attempt_parse_and_update_ui(apollo_conf_display_label, host_name_display_label, prompt_if_needed: bool):
+        nonlocal parsed_apollo_data
+        
+        # Inner function to perform the parsing and UI update for the current config path
+        def _do_parse_and_update():
+            nonlocal parsed_apollo_data
+            # Reset status before parsing
+            parsed_apollo_data["is_valid"] = False
+            parsed_apollo_data["apps_json"] = None
+            parsed_apollo_data["state_json"] = None
+            parsed_apollo_data["host_name"] = None
+            parsed_apollo_data["config_file_path_obj"] = None
+
+            apollo_conf_path_str = app_config.get("apollo_conf_path")
+            update_apollo_path_label(apollo_conf_display_label) # Ensure label reflects current state from app_config
+
+            if apollo_conf_path_str:
+                config_file_path_obj_temp = Path(apollo_conf_path_str)
+                if config_file_path_obj_temp.exists() and config_file_path_obj_temp.is_file():
+                    try:
+                        apps_json, state_json, host_name_parsed = parse_conf(config_file_path_obj_temp)
+                        
+                        if apps_json is not None and state_json is not None and host_name_parsed is not None:
+                            parsed_apollo_data["apps_json"] = apps_json
+                            parsed_apollo_data["state_json"] = state_json
+                            parsed_apollo_data["host_name"] = host_name_parsed
+                            parsed_apollo_data["config_file_path_obj"] = config_file_path_obj_temp
+                            parsed_apollo_data["is_valid"] = True
+                            
+                            update_host_name_label(host_name_display_label, host_name_parsed)
+                            print(f"Successfully parsed Apollo config for host: {host_name_parsed}")
+                            return True # Parsed successfully
+                        else:
+                            messagebox.showerror("Apollo Config Error", "Failed to parse critical data from Apollo config file. Check console for details.")
+                            update_host_name_label(host_name_display_label, "Error: Could not parse .conf")
+                    except Exception as e:
+                        messagebox.showerror("Apollo Config Error", f"Error parsing Apollo config file '{config_file_path_obj_temp.name}': {e}")
+                        update_host_name_label(host_name_display_label, f"Error parsing: {config_file_path_obj_temp.name}")
+                else:
+                    # Path in config is invalid (e.g., file deleted or moved)
+                    update_host_name_label(host_name_display_label, "Error: .conf path invalid")
+                    # update_apollo_path_label called above will show "Not Set" if path is truly gone from config,
+                    # or the invalid path if it's still set in config.
+            else:
+                # No Apollo config path set
+                update_host_name_label(host_name_display_label, "N/A - Set Apollo .conf file")
+            
+            return False # Parsing failed or path not set/invalid
+
+        # --- Main logic for _attempt_parse_and_update_ui ---
+        if _do_parse_and_update():
+            return True # Initial parse (or parse after "Set" button) successful
+
+        if prompt_if_needed:
+            messagebox.showinfo("Apollo Configuration Required", 
+                                "Apollo configuration file (.conf) is not set or is invalid. Please select it now.")
+            
+            prompt_and_save_apollo_conf_path(apollo_conf_display_label) 
+            
+            if _do_parse_and_update():
+                return True # Parse successful after prompt
+            
+            messagebox.showwarning("Apollo Configuration Failed", 
+                                   "Could not set or validate the Apollo configuration file. "\
+                                   "Please set it manually via the 'Set' button if needed.")
+        return False
+
+    # --- Helper function to dispatch to choose_and_run ---
+    def _dispatch_choose_and_run(mode, 
+                                 api_key_label=None, igdb_label=None, 
+                                 steam_var=None, igdb_fetch_var=None, skip_var=None):
+        nonlocal parsed_apollo_data
+        if parsed_apollo_data["is_valid"]:
+            choose_and_run(
+                root, mode,
+                parsed_apollo_data["apps_json"],
+                parsed_apollo_data["state_json"],
+                parsed_apollo_data["host_name"],
+                parsed_apollo_data["config_file_path_obj"],
+                api_key_label_widget=api_key_label,
+                igdb_label_widget=igdb_label,
+                steamgriddb_var=steam_var,
+                igdb_var=igdb_fetch_var,
+                skip_existing_var=skip_var
+            )
+        else:
+            messagebox.showerror("Apollo Config Not Ready", 
+                                 "Apollo configuration is not loaded or is invalid. Please set the .conf file and ensure it's correct.")
 
     # --- Configuration Management UI ---
     from tkinter import Frame
@@ -177,8 +264,15 @@ def main():
     lbl_apollo_conf_text.pack(side="left")
     lbl_apollo_conf_path_val = Label(apollo_path_frame, text="Not Set", fg="blue", width=40, anchor="w")
     lbl_apollo_conf_path_val.pack(side="left", expand=True, fill="x")
+    
+    # This label will be updated by _attempt_parse_and_update_ui
+    lbl_host_name_val = Label(root, text="N/A", width=60, anchor="w") # Placeholder, defined later
+
     btn_set_apollo_path = Button(apollo_path_frame, text="Set", 
-                                 command=lambda: prompt_and_save_apollo_conf_path(lbl_apollo_conf_path_val))
+                                 command=lambda: (
+                                     prompt_and_save_apollo_conf_path(lbl_apollo_conf_path_val), 
+                                     _attempt_parse_and_update_ui(lbl_apollo_conf_path_val, lbl_host_name_val, prompt_if_needed=False)
+                                 ))
     btn_set_apollo_path.pack(side="left")
 
     # SteamGridDB API Key Management
@@ -209,41 +303,57 @@ def main():
     
     Label(options_frame, text="Pegasus Frontend Options:").pack(anchor="w")
     
-    # SteamGridDB checkbox
     steamgriddb_var = BooleanVar()
     steamgriddb_checkbox = Checkbutton(options_frame, text="Download game assets from SteamGridDB", 
                                        variable=steamgriddb_var)
     steamgriddb_checkbox.pack(anchor="w", padx=20)
     
-    # IGDB checkbox
     igdb_var = BooleanVar()
     igdb_checkbox = Checkbutton(options_frame, text="Fetch game metadata from IGDB.com", 
                                 variable=igdb_var)
     igdb_checkbox.pack(anchor="w", padx=20)
 
-    # Skip existing checkbox
     skip_existing_var = BooleanVar()
     skip_existing_checkbox = Checkbutton(options_frame, text="Skip image fetching for existing ROM files (still update metadata)", 
                                         variable=skip_existing_var)
     skip_existing_checkbox.pack(anchor="w", padx=20)
 
-    Label(root, text="Generate launcher files for:").pack(pady=10)
+    # lbl_host_name_val was defined earlier to be available for lambda
+    lbl_host_name_val.pack(pady=(0,10), padx=20, anchor="w")
 
     # --- Action Buttons ---
     Button(root, text="Pegasus", width=28,
-           command=lambda: choose_and_run(root, "Pegasus", lbl_api_key_val, lbl_apollo_conf_path_val, lbl_igdb_creds_val, steamgriddb_var, igdb_var, skip_existing_var)).pack(pady=4)
+           command=lambda: _dispatch_choose_and_run(
+               "Pegasus", 
+               api_key_label=lbl_api_key_val, 
+               igdb_label=lbl_igdb_creds_val, 
+               steam_var=steamgriddb_var, 
+               igdb_fetch_var=igdb_var, 
+               skip_var=skip_existing_var
+           )).pack(pady=4)
     Button(root, text="ES-DE", width=28,
-           command=lambda: choose_and_run(root, "ES-DE", api_key_label_widget=None, apollo_conf_label_widget=lbl_apollo_conf_path_val, igdb_label_widget=None, skip_existing_var=skip_existing_var)).pack(pady=4)
+           command=lambda: _dispatch_choose_and_run(
+               "ES-DE",
+               skip_var=skip_existing_var
+           )).pack(pady=4) # Pass only skip_var as others are not used by ES-DE mode
     Button(root, text="Daijishō", width=28,
-           command=lambda: choose_and_run(root, "Daijishō", api_key_label_widget=None, apollo_conf_label_widget=lbl_apollo_conf_path_val, igdb_label_widget=None, skip_existing_var=skip_existing_var)).pack(pady=4)
+           command=lambda: _dispatch_choose_and_run(
+               "Daijishō",
+               skip_var=skip_existing_var
+           )).pack(pady=4) # Pass only skip_var
     Button(root, text="Generic", width=28,
-           command=lambda: choose_and_run(root, "Generic", api_key_label_widget=None, apollo_conf_label_widget=lbl_apollo_conf_path_val, igdb_label_widget=None, skip_existing_var=skip_existing_var)).pack(pady=4)
+           command=lambda: _dispatch_choose_and_run(
+               "Generic",
+               skip_var=skip_existing_var
+           )).pack(pady=4) # Pass only skip_var
     
     # Load initial config and update UI
     load_config()
-    update_apollo_path_label(lbl_apollo_conf_path_val)
-    update_api_key_label(lbl_api_key_val)
-    update_igdb_credentials_label(lbl_igdb_creds_val)
+    update_api_key_label(lbl_api_key_val) # Update API key display first
+    update_igdb_credentials_label(lbl_igdb_creds_val) # Update IGDB display
+    
+    # Initial attempt to parse Apollo config and update related UI elements
+    _attempt_parse_and_update_ui(lbl_apollo_conf_path_val, lbl_host_name_val, prompt_if_needed=True)
 
     root.mainloop()
 
