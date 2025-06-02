@@ -8,7 +8,12 @@ def generate_daijishou(app_map, host_uuid, host_name, out_dir):
     for name, game_data in app_map.items():
         uuid = game_data["uuid"]
         (out_dir / f"{sanitize(name)}.art").write_text(
-            f"# Daijishou Player Template\n[app_uuid] {uuid}\n", encoding="utf-8"
+            f"""# Daijishou Player Template
+[host_uuid] {host_uuid}
+[host_name] {host_name}
+[app_uuid] {uuid}
+[app_name] {name}
+""", encoding="utf-8"
         )
 
     payload = {
@@ -31,8 +36,9 @@ def generate_daijishou(app_map, host_uuid, host_name, out_dir):
                 "acceptedFilenameRegex": r"^(.*)\.(?:art)$",
                 "amStartArguments": (
                     "-n com.limelight.noir/com.limelight.ShortcutTrampoline\n"
-                    f" --es UUID {host_uuid}\n"
-                    " --es AppUUID {tags.app_uuid}"
+                    " --es UUID {tags.host_uuid}\n"
+                    " --es AppUUID {tags.app_uuid}\n"
+                    " --es AppName \"{tags.app_name}\""
                 ),
                 "killPackageProcesses": True,
                 "killPackageProcessesWarning": True,

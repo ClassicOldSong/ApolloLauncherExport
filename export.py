@@ -18,7 +18,7 @@ from gui_components import (
     prompt_and_save_apollo_conf_path, prompt_and_save_api_key, prompt_and_set_igdb_credentials
 )
 from api_clients import MetadataFetcher, check_steamgriddb_key_validity, check_igdb_token_validity
-from generators import generate_daijishou, generate_esde, generate_pegasus
+from generators import generate_daijishou, generate_esde, generate_pegasus, generate_generic
 
 try:
     import requests
@@ -155,8 +155,10 @@ def choose_and_run(root, mode: str, api_key_label_widget=None, apollo_conf_label
                          skip_existing_var.get() if skip_existing_var else False)
     elif mode == "ES-DE":
         generate_esde(app_map, host_uuid, host_name, out_dir)
-    else: # Daijishō
+    elif mode == "Daijishō":
         generate_daijishou(app_map, host_uuid, host_name, out_dir)
+    elif mode == "Generic":
+        generate_generic(app_map, host_uuid, host_name, out_dir)
 
 
 def main():
@@ -234,7 +236,9 @@ def main():
            command=lambda: choose_and_run(root, "ES-DE", api_key_label_widget=None, apollo_conf_label_widget=lbl_apollo_conf_path_val, igdb_label_widget=None, skip_existing_var=skip_existing_var)).pack(pady=4)
     Button(root, text="Daijishō", width=28,
            command=lambda: choose_and_run(root, "Daijishō", api_key_label_widget=None, apollo_conf_label_widget=lbl_apollo_conf_path_val, igdb_label_widget=None, skip_existing_var=skip_existing_var)).pack(pady=4)
-
+    Button(root, text="Generic", width=28,
+           command=lambda: choose_and_run(root, "Generic", api_key_label_widget=None, apollo_conf_label_widget=lbl_apollo_conf_path_val, igdb_label_widget=None, skip_existing_var=skip_existing_var)).pack(pady=4)
+    
     # Load initial config and update UI
     load_config()
     update_apollo_path_label(lbl_apollo_conf_path_val)

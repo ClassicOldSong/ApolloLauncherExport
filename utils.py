@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import re
+import socket
 import sys
 import shutil
 import os
@@ -78,7 +79,7 @@ def parse_conf(conf_path: Path):
     base = conf_path.parent
     apps_file  = cfg["root"].get("file_apps",  "apps.json")
     state_file = cfg["root"].get("file_state", "sunshine_state.json")
-    host_name  = cfg["root"].get("sunshine_name", "Apollo Streaming") # Default value as in original
+    host_name  = cfg["root"].get("sunshine_name", socket.gethostname()) # Use computer's hostname as default
 
     return (base / apps_file).resolve(), (base / state_file).resolve(), host_name.strip()
 
