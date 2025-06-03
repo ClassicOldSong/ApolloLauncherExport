@@ -30,17 +30,11 @@ IGDB_API_URL = "https://api.igdb.com/v4" # Base URL for IGDB API v4
 @dataclass
 class FetchJob:
     game_name: str
-    uuid: str
-    output_directory: Path
-    steamgriddb_assets: dict[str, str] = field(default_factory=dict) # e.g., {"logo": "my_logo_filename", "steam": "steam_grid_custom"}
+    game_uuid: str # Will be used as the primary key for results
+    steamgriddb_assets: dict[str, Path] = field(default_factory=dict) # e.g., {"logo": Path("media/logo/MyGame")}
     fetch_igdb_text_metadata: bool = True
-    igdb_assets: dict[str, str] = field(default_factory=dict) # e.g., {"boxFront": "cover_art_file", "screenshot": "game_sc"}
-    # This is if the generator determines based on existing files (e.g. .artp) that no images are needed for *this specific game*
-    skip_all_image_fetching_for_this_game: bool = False 
-    # Optional: Info from SteamGridDB about what it found, to help IGDB decide if it needs to fetch overlapping assets like covers
-    # This would be populated by an initial SGDB pass if SGDB is used for a game.
-    # For now, we might simplify and let IGDB always try, and the generator/downloader can handle overwrites or skips.
-    # Let's keep it simple for now and remove: existing_steamgriddb_assets_info: dict = field(default_factory=dict)
+    igdb_assets: dict[str, Path] = field(default_factory=dict) # e.g., {"boxFront": Path("media/box2dfront/MyGame")}
+    skip_images: bool = False
 
 
 class MetadataFetcher:
@@ -136,15 +130,15 @@ class MetadataFetcher:
         
         return fetched_urls_info
 
-    def _fetch_igdb_data(self, game_name: str, game_info_from_search:dict, fetch_text: bool, desired_igdb_asset_map: dict[str, str], 
-                         skip_image_download_for_this_game: bool, output_dir: Path,
+    def _fetch_igdb_data(self, game_name: str, game_info_from_search:dict, fetch_text: bool, desired_igdb_asset_map: dict[str, Path], 
+                         skip_images: bool,
                          results_queue, cancel_event) -> dict:
         """
         Internal helper to process a found IGDB game for metadata and image URLs.
         Downloads images if not skipped.
         Returns a dict with 'text_data' and 'downloaded_images' (paths).
         'game_info_from_search' is the validated game object from the initial IGDB search.
-        `desired_igdb_asset_map` is like {"boxFront": "my_cover_filename_base"}
+        `desired_igdb_asset_map` is like {"boxFront": Path("media/box2dfront/MyGameBaseName")}
         """
         if not self.IGDBWrapper or not self.requests or not self.igdb_client_id or not self.igdb_app_access_token:
             return {"text_data": {}, "downloaded_images": {}} # Should be checked before calling
@@ -189,7 +183,7 @@ class MetadataFetcher:
         if cancel_event.is_set(): return final_igdb_data
 
         # --- Image URLs and Downloads ---
-        if desired_igdb_asset_map and not skip_image_download_for_this_game:
+        if desired_igdb_asset_map and not skip_images:
             results_queue.put({"status": "asset_update", "game_name": game_name, "asset_info": "IGDB: Processing images..."})
             igdb_image_map_fields = {
                 # Our key : { igdb_field, igdb_size_suffix }
@@ -198,7 +192,7 @@ class MetadataFetcher:
                 "background": {"field": "artworks", "image_id_key": "image_id", "size": "t_1080p"}
             }
 
-            for asset_key, desired_basename in desired_igdb_asset_map.items():
+            for asset_key, base_output_path in desired_igdb_asset_map.items(): # base_output_path is Path object without extension
                 if cancel_event.is_set(): break
                 if asset_key not in igdb_image_map_fields:
                     results_queue.put({"status": "asset_update", "game_name": game_name, "asset_info": f"IGDB: Unknown asset type '{asset_key}' requested."})
@@ -217,15 +211,16 @@ class MetadataFetcher:
                 
                 if image_id:
                     img_url = self.format_igdb_image_url(image_id, img_details["size"])
-                    # IGDB images are typically jpg
-                    output_file_path = output_dir / f"{desired_basename}.jpg"
+                    # IGDB images are typically jpg. The base_output_path from job already has dir and basename.
+                    output_file_path_with_ext = base_output_path.with_suffix(".jpg") 
+                    output_file_path_with_ext.parent.mkdir(parents=True, exist_ok=True) # Ensure directory exists
                     
-                    downloaded_path = self._download_asset(img_url, output_file_path, asset_key, game_name, results_queue, source="IGDB")
+                    downloaded_path = self._download_asset(img_url, output_file_path_with_ext, asset_key, game_name, results_queue, source="IGDB")
                     if downloaded_path:
                         final_igdb_data["downloaded_images"][asset_key] = downloaded_path
                 else:
                     results_queue.put({"status": "asset_update", "game_name": game_name, "asset_info": f"IGDB: No image ID found for {asset_key}."})
-        elif skip_image_download_for_this_game:
+        elif skip_images:
              results_queue.put({"status": "asset_update", "game_name": game_name, "asset_info": "IGDB: Image fetching skipped for this game (job setting)."})
 
         return final_igdb_data
@@ -240,7 +235,7 @@ class MetadataFetcher:
         # TODO: If root_ui_for_dialog is provided, manage a progress dialog here.
         # For now, we assume this method itself is run in a thread by the generator.
 
-        all_results_by_uuid = {} # { uuid: { game_name, text_data, downloaded_sgdb_paths, downloaded_igdb_paths }}
+        all_results_by_game_name = {} # Changed from all_results_by_uuid
         total_jobs = len(fetch_jobs)
         processed_jobs = 0
 
@@ -269,7 +264,6 @@ class MetadataFetcher:
                 "game_name": job.game_name, 
                 "current_job_num": processed_jobs, 
                 "total_jobs": total_jobs,
-                "job_uuid": job.uuid
             })
 
             job_result = {
@@ -279,10 +273,10 @@ class MetadataFetcher:
                 "downloaded_igdb_assets": {} # { asset_type_key: Path }
             }
             
-            job.output_directory.mkdir(parents=True, exist_ok=True)
+            # job.output_directory.mkdir(parents=True, exist_ok=True) # Removed: individual asset dirs created as needed
 
             # --- SteamGridDB ---
-            if not job.skip_all_image_fetching_for_this_game and job.steamgriddb_assets and self.steamgriddb_api_key and self.requests:
+            if (not job.skip_images) and (job.steamgriddb_assets and self.steamgriddb_api_key and self.requests):
                 results_queue.put({"status": "asset_update", "game_name": job.game_name, "asset_info": f"SteamGridDB: Searching for game ID..."})
                 sgdb_game_id = None
                 try:
@@ -303,23 +297,16 @@ class MetadataFetcher:
                     
                     for asset_key, url_details in sgdb_asset_urls_info.items():
                         if cancel_event.is_set(): break
-                        # Construct filename from user-defined basename + original extension
-                        desired_basename = job.steamgriddb_assets[asset_key]
-                        output_filename = f"{desired_basename}{url_details['original_extension']}"
-                        output_file_path = job.output_directory / output_filename
+                        # Construct filename from user-defined base_path + original extension
+                        base_output_path = job.steamgriddb_assets[asset_key] # This is now a Path object without extension
+                        output_file_path = base_output_path.with_suffix(url_details['original_extension'])
+                        
+                        output_file_path.parent.mkdir(parents=True, exist_ok=True) # Ensure directory exists
                         
                         downloaded_path = self._download_asset(url_details["url"], output_file_path, asset_key, job.game_name, results_queue, headers=url_details.get("headers"), source="SteamGridDB")
                         if downloaded_path:
                             job_result["downloaded_steamgriddb_assets"][asset_key] = downloaded_path
             
-            elif job.skip_all_image_fetching_for_this_game and job.steamgriddb_assets: # Check if there were assets to fetch but skipped
-                results_queue.put({"status": "asset_update", "game_name": job.game_name, "asset_info": f"SteamGridDB: Image downloads skipped for this game (job setting)."})
-
-
-            if cancel_event.is_set(): 
-                all_results_by_uuid[job.uuid] = job_result # Store partial result if cancelled mid-job
-                continue # Move to next job or break if outer loop checks
-
             # --- IGDB ---
             # Pass the whole igdb_assets dict (map of asset_key: basename)
             if (job.fetch_igdb_text_metadata or job.igdb_assets) and igdb_wrapper_instance:
@@ -374,26 +361,25 @@ class MetadataFetcher:
                         job.game_name, 
                         best_match_game_data,
                         job.fetch_igdb_text_metadata,
-                        job.igdb_assets, # Pass the dict {asset_key: basename}
-                        job.skip_all_image_fetching_for_this_game, # This game specific skip
-                        job.output_directory,
+                        job.igdb_assets, # Pass the dict {asset_key: Path without extension}
+                        job.skip_images,
                         results_queue,
                         cancel_event
                     )
                     job_result["text_data"].update(igdb_processed_data.get("text_data", {}))
                     job_result["downloaded_igdb_assets"].update(igdb_processed_data.get("downloaded_images", {}))
             
-            all_results_by_uuid[job.uuid] = job_result
+            all_results_by_game_name[job.game_name] = job_result
             # Report intermediate full result for this job if needed by UI for live updates
             results_queue.put({
                 "status": "job_completed",
-                "uuid": job.uuid,
+                "uuid": job.game_uuid, # Using game_name as the identifier
                 "data": job_result
             })
 
         results_queue.put({
             "status": "fetch_plan_complete",
-            "all_results": all_results_by_uuid
+            "all_results": all_results_by_game_name
         })
         print("[MetadataFetcher] Fetch plan execution complete.")
 

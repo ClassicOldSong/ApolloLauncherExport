@@ -36,67 +36,62 @@ except ImportError:
     IGDBWrapper = None
 
 def choose_and_run(root, mode: str, 
-                   # Parsed Apollo data:
                    apps_json, state_json, host_name, config_file_path_obj, 
-                   # Other params:
                    api_key_label_widget=None, igdb_label_widget=None, 
                    steamgriddb_var=None, igdb_var=None, skip_existing_var=None):
-    # Apollo config is now parsed beforehand and data is passed in.
-    # The config_file_path_obj is passed for Pegasus generator.
-    # host_name is passed directly.
-    # apps_json and state_json are passed directly.
-
+    
     app_map, host_uuid = collect_data(apps_json, state_json)
     if not app_map:
         messagebox.showerror("No games", "No apps with UUID found in apps.json")
         return
 
-    # Host name label is updated externally now.
-    # print(f"Debug: Processing for host: {host_name} in mode: {mode}")
-
     out_dir = BASE_DIR / mode / host_name
     ensure_out_dir(out_dir)
 
+    # Initialize variables for fetching
     use_steamgriddb = False
     current_steamgriddb_api_key = app_config.get("steamgriddb_api_key")
-
     fetch_igdb_enabled_for_run = False
     current_igdb_client_id = app_config.get("igdb_client_id")
     current_igdb_app_access_token = app_config.get("igdb_app_access_token")
+    metadata_fetcher = None
 
-    metadata_fetcher = None # Initialize metadata_fetcher
-
-    if mode == "Pegasus":
+    # Common logic for creating MetadataFetcher based on UI settings
+    # This applies if mode is Pegasus, ES-DE, or Daijisho and relevant checkboxes are ticked
+    if mode in ["Pegasus", "ES-DE", "Daijishō"]:
         if not requests:
-            messagebox.showwarning("Missing Library", "The 'requests' library is not installed. SteamGridDB and IGDB features are disabled.")
+            # Only show warning if user actually tried to enable a feature requiring requests
+            if (steamgriddb_var and steamgriddb_var.get()) or \
+               (igdb_var and igdb_var.get()):
+                messagebox.showwarning("Missing Library", "The 'requests' library is not installed. SteamGridDB and IGDB features are disabled.")
         else:
-            # SteamGridDB Setup - check if checkbox is enabled
+            # SteamGridDB Setup
             if steamgriddb_var and steamgriddb_var.get():
                 if current_steamgriddb_api_key and check_steamgriddb_key_validity(current_steamgriddb_api_key):
                     use_steamgriddb = True
                     print("Using existing valid SteamGridDB API key.")
                 else:
-                    if current_steamgriddb_api_key:
+                    if current_steamgriddb_api_key: # Key exists but is invalid
                         messagebox.showwarning("SteamGridDB API Key Invalid", 
                                                "Your configured SteamGridDB API key is invalid. Please set a new one.")
-                    else:
+                    else: # Key not set at all
                         messagebox.showinfo("SteamGridDB API Key Needed", 
                                             "SteamGridDB API key is not configured. Please set it to enable asset fetching.")
                     
-                    if api_key_label_widget:
+                    if api_key_label_widget: # Ensure UI element is available for update
                         prompt_and_save_api_key(root, api_key_label_widget)
                         current_steamgriddb_api_key = app_config.get("steamgriddb_api_key")
                         if current_steamgriddb_api_key and check_steamgriddb_key_validity(current_steamgriddb_api_key):
                             use_steamgriddb = True
                             print("Using newly set and validated SteamGridDB API key.")
                         else:
-                            print("SteamGridDB API key not set or invalid after prompt. Fetching disabled.")
+                            print("SteamGridDB API key not set or invalid after prompt. Fetching via SGDB disabled.")
                     else:
-                        print("SteamGridDB UI element missing. Cannot prompt for key.")
+                        print("SteamGridDB UI element (api_key_label_widget) not provided. Cannot prompt for key.")
             else:
                 print("SteamGridDB asset fetching disabled (checkbox unchecked).")
 
-            # IGDB Setup - check if checkbox is enabled (independent of SteamGridDB)
+            # IGDB Setup
             if igdb_var and igdb_var.get():
                 if IGDBWrapper:
                     valid_igdb_creds = False
@@ -112,7 +107,7 @@ def choose_and_run(root, mode: str,
                         messagebox.showinfo("IGDB Credentials Needed", 
                                             "IGDB Client ID and/or App Access Token are not configured. Please set them to enable metadata fetching.")
                     
-                    if not valid_igdb_creds and igdb_label_widget:
+                    if not valid_igdb_creds and igdb_label_widget: # Ensure UI element for update
                         prompt_and_set_igdb_credentials(root, igdb_label_widget)
                         current_igdb_client_id = app_config.get("igdb_client_id")
                         current_igdb_app_access_token = app_config.get("igdb_app_access_token")
@@ -121,13 +116,13 @@ def choose_and_run(root, mode: str,
                             fetch_igdb_enabled_for_run = True
                             print("Using newly set and validated IGDB credentials.")
                         else:
-                            print("IGDB credentials not set or invalid after prompt. Fetching disabled.")
+                            print("IGDB credentials not set or invalid after prompt. Fetching via IGDB disabled.")
                     elif not valid_igdb_creds:
-                        print("IGDB UI element missing or initial creds invalid and no UI to prompt. Cannot set IGDB credentials.")
-                else:
+                        print("IGDB UI element (igdb_label_widget) not provided or initial creds invalid. Cannot prompt for IGDB credentials.")
+                else: # IGDBWrapper (library) not available
                     messagebox.showwarning("Missing Dependency", 
-                                         "IGDB metadata fetching is enabled, but the 'igdb-api-python' library is not installed. Please install it using: pip install igdb-api-python")
-                    print("IGDB fetching desired but 'igdb-api-python' is missing. Skipping.")
+                                         "IGDB metadata fetching is enabled, but the 'igdb-api-python' library is not installed. Please install it.")
+                    print("IGDB fetching desired but 'igdb-api-python' is missing. Skipping IGDB.")
             else:
                 print("IGDB metadata fetching disabled (checkbox unchecked).")
 
@@ -138,16 +133,25 @@ def choose_and_run(root, mode: str,
                     igdb_client_id=current_igdb_client_id if fetch_igdb_enabled_for_run else None,
                     igdb_app_access_token=current_igdb_app_access_token if fetch_igdb_enabled_for_run else None
                 )
+    
+    # Dispatch to the appropriate generator
+    active_skip_existing = skip_existing_var.get() if skip_existing_var else False
 
+    if mode == "Pegasus":
         generate_pegasus(root, app_map, host_uuid, host_name, out_dir, config_file_path_obj,
-                         metadata_fetcher, # Pass the instance
-                         skip_existing_var.get() if skip_existing_var else False)
+                         metadata_fetcher, 
+                         active_skip_existing)
     elif mode == "ES-DE":
-        generate_esde(app_map, host_uuid, host_name, out_dir, skip_existing_var.get() if skip_existing_var else False)
+        generate_esde(root, app_map, host_uuid, host_name, out_dir, 
+                      metadata_fetcher, 
+                      active_skip_existing)
     elif mode == "Daijishō":
-        generate_daijishou(app_map, host_uuid, host_name, out_dir, skip_existing_var.get() if skip_existing_var else False)
-    elif mode == "Generic":
-        generate_generic(app_map, host_uuid, host_name, out_dir, skip_existing_var.get() if skip_existing_var else False)
+        generate_daijishou(root, app_map, host_uuid, host_name, out_dir,
+                           metadata_fetcher, 
+                           active_skip_existing)
+    elif mode == "Generic": 
+        # Generic mode does not use online fetching currently
+        generate_generic(app_map, host_uuid, host_name, out_dir, active_skip_existing)
 
 
 def main():
@@ -301,7 +305,8 @@ def main():
     options_frame = Frame(root, pady=10)
     options_frame.pack(fill="x", padx=10)
     
-    Label(options_frame, text="Pegasus Frontend Options:").pack(anchor="w")
+    Label(options_frame, text="Options:").pack(anchor="w")
+    Label(options_frame, text="Metadata and images are not fetched for generic platform generation.", fg="gray", font=("Arial", 8)).pack(anchor="w")
     
     steamgriddb_var = BooleanVar()
     steamgriddb_checkbox = Checkbutton(options_frame, text="Download game assets from SteamGridDB", 
@@ -334,18 +339,30 @@ def main():
     Button(root, text="ES-DE", width=28,
            command=lambda: _dispatch_choose_and_run(
                "ES-DE",
+               api_key_label=lbl_api_key_val,      # Pass common UI elements/vars
+               igdb_label=lbl_igdb_creds_val,      # Pass common UI elements/vars
+               steam_var=steamgriddb_var,          # Pass common UI elements/vars
+               igdb_fetch_var=igdb_var,          # Pass common UI elements/vars
                skip_var=skip_existing_var
-           )).pack(pady=4) # Pass only skip_var as others are not used by ES-DE mode
+           )).pack(pady=4)
     Button(root, text="Daijishō", width=28,
            command=lambda: _dispatch_choose_and_run(
                "Daijishō",
+               api_key_label=lbl_api_key_val,      # Pass common UI elements/vars
+               igdb_label=lbl_igdb_creds_val,      # Pass common UI elements/vars
+               steam_var=steamgriddb_var,          # Pass common UI elements/vars
+               igdb_fetch_var=igdb_var,          # Pass common UI elements/vars
                skip_var=skip_existing_var
-           )).pack(pady=4) # Pass only skip_var
+           )).pack(pady=4)
     Button(root, text="Generic", width=28,
-           command=lambda: _dispatch_choose_and_run(
+           command=lambda: _dispatch_choose_and_run( # Generic might not use all these, but pass for consistency
                "Generic",
+               api_key_label=lbl_api_key_val,
+               igdb_label=lbl_igdb_creds_val,
+               steam_var=steamgriddb_var,
+               igdb_fetch_var=igdb_var,
                skip_var=skip_existing_var
-           )).pack(pady=4) # Pass only skip_var
+           )).pack(pady=4)
     
     # Load initial config and update UI
     load_config()

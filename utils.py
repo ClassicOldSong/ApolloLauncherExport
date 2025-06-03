@@ -58,10 +58,14 @@ def download_image(url: str, save_path: Path, headers: dict = None):
         print(f"Error downloading {url}: {e}")
         return False
 
-def sanitize(name: str) -> str:
-    """Remove filename-hostile characters."""
+def sanitize_filename(name: str) -> str:
+    """Remove filename-hostile characters to create a valid filename.
+    Replaces ':' with ' - ' and removes characters like <, >, ", /, \, |, ?, *.
+    """
     name = name.replace(":", " - ")
-    return re.sub(r'[<>:"/\\|?*]', "", name)
+    # The characters <, >, :, ", /, \, |, ?, * are invalid in Windows filenames.
+    # / is also invalid in Linux/macOS.
+    return re.sub(r'[<>:"/\|?*]', "", name)
 
 def parse_conf(conf_path: Path):
     """

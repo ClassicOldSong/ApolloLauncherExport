@@ -4,6 +4,7 @@ import queue
 import shutil
 from pathlib import Path
 from tkinter import messagebox
+from generators.generic_generator import generate_generic_art_files
 
 try:
     import requests
@@ -17,7 +18,7 @@ try:
 except ImportError:
     IGDBWrapper = None
 
-from utils import open_directory
+from utils import open_directory, sanitize_filename
 from gui_components import show_progress_dialog
 from api_clients import MetadataFetcher, FetchJob
 
@@ -26,52 +27,94 @@ def _generate_pegasus_metadata_file(app_map, host_uuid, host_name, out_dir, all_
     metadata_content = []
     metadata_content.append(f"collection: {host_name}")
     metadata_content.append("shortname: artemis")
-    metadata_content.append("extension: artp")
-    launch_command = f"am start -n com.limelight.noir/com.limelight.ShortcutTrampoline --es UUID {host_uuid} --es AppUUID {{file.basename}}"
+    metadata_content.append("extension: art")
+    launch_command = f"am start -n com.limelight.noir/com.limelight.ShortcutTrampoline -a android.intent.action.VIEW -d {{file.uri}}"
     metadata_content.append(f"launch: {launch_command}")
     metadata_content.append("")
+
+    generate_generic_art_files(app_map, host_uuid, host_name, out_dir)
 
     for name, game_data in app_map.items():
         uuid = game_data["uuid"]
         metadata_content.append(f"game: {name}")
-        metadata_content.append(f"file: {uuid}.artp")
+        metadata_content.append(f"file: {sanitize_filename(name)}.art")
 
         # Check for and append IGDB metadata if available from the fetch results
         if uuid in all_fetched_text_data and all_fetched_text_data[uuid]:
-            igdb_data = all_fetched_text_data[uuid] # This now directly contains the text fields
-            pegasus_igdb_mapping = {
-                # IGDB field name : Pegasus field name
-                # 'game' is already handled by 'name' from app_map
+            igdb_data = all_fetched_text_data[uuid]
+            
+            pegasus_field_mapping = {
                 "summary": "summary",
-                "description": "description",
+                "storyline": "description",
                 "developer": "developer",
                 "publisher": "publisher",
                 "genre": "genre",
                 "rating": "rating",
-                "release": "release",
-                "tags": "tags" # Assuming 'tags' is a desired Pegasus field from IGDB game_modes/player_perspectives
+                "release_date": "release"
             }
-            for igdb_key, pegasus_key in pegasus_igdb_mapping.items():
-                if igdb_data.get(igdb_key):
-                    # Format multi-line text properly for Pegasus
-                    text_value = str(igdb_data[igdb_key])
-                    if "\n" in text_value or len(text_value) > 80: # Arbitrary length for multi-line consideration
-                        lines = text_value.split('\n')
-                        # Trim and filter empty lines for description/summary
-                        if pegasus_key in ["summary", "description"]:
-                            processed_lines = [line.strip() for line in lines if line.strip()]
-                            if not processed_lines: continue # Skip if all lines are empty after processing
-                            metadata_content.append(f"{pegasus_key}: {processed_lines[0]}")
-                            for line in processed_lines[1:]:
-                                metadata_content.append(f"  {line}")
-                        else:
-                            metadata_content.append(f"{pegasus_key}: {lines[0].strip()}") # Trim first line for other fields
-                            for line in lines[1:]:
-                                stripped_line = line.strip()
-                                if stripped_line: # Add only if not empty after stripping
-                                    metadata_content.append(f"  {stripped_line}")
+
+            for igdb_processed_key, pegasus_key in pegasus_field_mapping.items():
+                if igdb_data.get(igdb_processed_key):
+                    raw_value = igdb_data[igdb_processed_key]
+                    processed_value_str = ""
+
+                    if isinstance(raw_value, list):
+                        processed_value_str = ", ".join(str(item).strip() for item in raw_value if str(item).strip())
+                    elif igdb_processed_key == "release_date" and isinstance(raw_value, str):
+                        processed_value_str = raw_value.split(" ")[0]
+                    elif isinstance(raw_value, (float, int)):
+                        processed_value_str = str(raw_value)
+                    elif isinstance(raw_value, str):
+                        processed_value_str = raw_value
                     else:
-                        metadata_content.append(f"{pegasus_key}: {text_value.strip()}") # Trim single line text
+                        processed_value_str = str(raw_value)
+
+                    if not processed_value_str.strip():
+                        continue
+                    
+                    # Multi-line formatting logic:
+                    # Check for actual newline character OR if the string is very long (for summary/description)
+                    is_potentially_multiline = "\n" in processed_value_str
+                    is_long_text = len(processed_value_str) > 80
+                    
+                    if pegasus_key in ["summary", "description"] and (is_potentially_multiline or is_long_text):
+                        # Use splitlines() to handle different newline types correctly (\n, \r\n)
+                        current_lines = [line.strip() for line in processed_value_str.splitlines() if line.strip()]
+                        if not current_lines: # If all lines are empty after stripping
+                            # Try splitting by sentence for very long lines without explicit newlines for summary/description
+                            if is_long_text and not is_potentially_multiline and len(processed_value_str.split(". ")) > 1 :
+                                current_lines = [line.strip() + "." if not line.endswith(".") else line.strip() for line in processed_value_str.split(". ") if line.strip()]
+                                # Remove trailing period from last sentence if split added extra
+                                if current_lines and processed_value_str.endswith(".") and current_lines[-1].endswith(".."):
+                                     current_lines[-1] = current_lines[-1][:-1]
+                                elif not processed_value_str.endswith(".") and current_lines and current_lines[-1].endswith("."): # if original didn't end with '.'
+                                     current_lines[-1] = current_lines[-1][:-1]
+
+
+                            if not current_lines: continue # Skip if still no content
+
+                        metadata_content.append(f"{pegasus_key}: {current_lines[0]}")
+                        for line_content in current_lines[1:]:
+                            metadata_content.append(f"  {line_content}")
+                    else:
+                        # For other fields or non-multiline summary/description,
+                        # replace newlines with spaces to ensure a single line.
+                        final_single_line_value = processed_value_str.replace("\n", " ").strip()
+                        if final_single_line_value: # ensure not empty
+                           metadata_content.append(f"{pegasus_key}: {final_single_line_value}")
+
+            # Handle 'tags' by combining multiple list fields from IGDB
+            tag_source_keys = ["game_modes", "player_perspectives", "themes", "keywords"]
+            all_tags_list = []
+            for key in tag_source_keys:
+                if igdb_data.get(key) and isinstance(igdb_data[key], list):
+                    all_tags_list.extend(str(item).strip() for item in igdb_data[key] if str(item).strip())
+            
+            if all_tags_list:
+                # Create a unique, sorted list of tags
+                unique_tags = sorted(list(set(tag_item for tag_item in all_tags_list if tag_item)))
+                if unique_tags:
+                    metadata_content.append(f"tags: {', '.join(unique_tags)}")
 
         metadata_content.append("")
     
@@ -149,10 +192,9 @@ def generate_pegasus(root, app_map, host_uuid, host_name, out_dir, config_path,
         uuid = game_data["uuid"]
         app_image_path_str = game_data.get("app_image")
 
-        (out_dir / f"{uuid}.artp").write_text(f"[metadata]\napp_name={name}\napp_uuid={uuid}\nhost_uuid={host_uuid}\n", encoding="utf-8")
         
-        media_game_dir = media_base_dir / uuid # Define media_game_dir for each game
-        # No need to mkdir here yet, FetchJob output_directory will ensure it.
+        # media_game_dir is where FetchJob places downloads initially (media/uuid/)
+        # It will be created by FetchJob if needed. Local copies go elsewhere.
 
         # Check for local image copy logic
         if app_image_path_str:
@@ -161,30 +203,30 @@ def generate_pegasus(root, app_map, host_uuid, host_name, out_dir, config_path,
                 app_image_path = assets_dir / app_image_path
             
             if app_image_path.exists() and app_image_path.is_file():
-                # Create directory if we are going to copy something
-                media_game_dir.mkdir(parents=True, exist_ok=True)
-
-                boxfront_png_path = media_game_dir / "boxFront.png" # Default local copy filename
-                # We don't check for steam.png or boxFront.jpg here for *skipping the copy*
-                # because those will be handled by the MetadataFetcher based on desired assets.
-                # The local copy is a fallback if no other cover-like asset is specifically requested or found.
-                # However, if skip_existing_rom_files_for_images is true, AND an .artp exists, 
-                # we might want to inform the FetchJob to skip images.
+                sanitized_game_name = sanitize_filename(name)
+                media_type_for_local_copy = "box2dfront" # Local images are treated as boxFront
+                target_media_dir_for_local = media_base_dir / media_type_for_local_copy
                 
-                if not boxfront_png_path.exists(): # Only copy if our specific target doesn't exist
+                source_file_extension = app_image_path.suffix # e.g. ".png"
+                new_local_copy_path = target_media_dir_for_local / f"{sanitized_game_name}{source_file_extension}"
+
+                # Create directory if we are going to copy something
+                target_media_dir_for_local.mkdir(parents=True, exist_ok=True)
+                
+                if not new_local_copy_path.exists(): # Only copy if our specific target doesn't exist
                     try:
-                        shutil.copy2(app_image_path, boxfront_png_path)
-                        print(f"Copied local image for {name} to {boxfront_png_path.name}")
+                        shutil.copy2(app_image_path, new_local_copy_path)
+                        print(f"Copied local image for {name} to {new_local_copy_path}")
                     except Exception as e:
-                        print(f"Skipping local image copy for {name} ({boxfront_png_path.name}) due to error: {e}")
+                        print(f"Skipping local image copy for {name} ({new_local_copy_path}) due to error: {e}")
                 else:
-                    print(f"Local image {boxfront_png_path.name} already exists for {name}. Not overwriting with local copy.")
+                    print(f"Local image {new_local_copy_path} already exists for {name}. Not overwriting with local copy.")
             else:
                 print(f"Skipping local image for {name}: {app_image_path_str} not found or not a file.")
 
         # Determine game_specific_image_skip_flags based on UI checkbox and .artp existence
-        artp_file_path = out_dir / f"{uuid}.artp"
-        if skip_existing_rom_files_for_images and artp_file_path.exists():
+        art_file_path = out_dir / f"{sanitized_game_name}.art"
+        if skip_existing_rom_files_for_images and art_file_path.exists():
             game_specific_image_skip_flags[uuid] = True
             print(f"Flagging {name} ({uuid}) to skip all image downloads due to existing .artp and UI setting.")
         else:
@@ -203,34 +245,33 @@ def generate_pegasus(root, app_map, host_uuid, host_name, out_dir, config_path,
     fetch_jobs = []
     for name, game_data in app_map.items():
         uuid = game_data["uuid"]
-        game_output_dir = media_base_dir / uuid
+        sanitized_game_name = sanitize_filename(name)
 
         # Define desired assets for Pegasus - this is where frontend specific logic goes
         desired_sgdb_assets_map = {}
         if metadata_fetcher.steamgriddb_api_key:
             desired_sgdb_assets_map = {
-                "logo": "logo",      # API asset type: desired basename for Pegasus
-                "steam": "steam",    # For grid/cover
-                "hero": "marqee",    # SGDB "hero" is Pegasus "marqee"
-                "tile": "tile"
+                "logo": media_base_dir / "logo" / sanitized_game_name,      # API asset type: desired basename for Pegasus
+                "steam": media_base_dir / "steam" / sanitized_game_name,    # For grid/cover
+                "hero": media_base_dir / "marqee" / sanitized_game_name,    # SGDB "hero" is Pegasus "marqee"
+                "tile": media_base_dir / "tile" / sanitized_game_name
             }
 
         igdb_assets_map = {}
         if metadata_fetcher.igdb_client_id: # Also implies token is likely present if fetcher is used
             igdb_assets_map = {
-                "boxFront": "boxFront", # For cover
-                "screenshot": "screenshot",
-                "background": "background"
+                "boxFront": media_base_dir / "box2dfront" / sanitized_game_name, # For cover
+                "screenshot": media_base_dir / "screenshot" / sanitized_game_name,
+                "background": media_base_dir / "background" / sanitized_game_name
             }
 
         job = FetchJob(
             game_name=name,
-            uuid=uuid,
-            output_directory=game_output_dir,
+            game_uuid=uuid,
             steamgriddb_assets=desired_sgdb_assets_map,
             fetch_igdb_text_metadata=True if metadata_fetcher.igdb_client_id else False,
             igdb_assets=igdb_assets_map,
-            skip_all_image_fetching_for_this_game=game_specific_image_skip_flags.get(uuid, False)
+            skip_images=game_specific_image_skip_flags.get(uuid, False)
         )
         fetch_jobs.append(job)
 
@@ -272,7 +313,7 @@ def generate_pegasus(root, app_map, host_uuid, host_name, out_dir, config_path,
         if was_cancelled:
             final_message = f"Asset fetching cancelled. Metadata file generated (may be incomplete)."
         elif errors_during_fetch: # We need a way to flag errors from queue messages
-            final_message += "\n\nNote: Some errors may have occurred during asset/metadata fetching. Check console."
+            final_message += "\n\nNote: Some errors may have occurred during asset/metadata fetching."
         
         messagebox.showinfo("Done", final_message)
         open_directory(out_dir)
