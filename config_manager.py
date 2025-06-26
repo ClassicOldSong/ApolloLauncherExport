@@ -21,7 +21,7 @@ def load_config():
         return # No config file yet, will use defaults or prompt
 
     try:
-        config.read(CONFIG_FILE_PATH, encoding='utf-8')
+        config.read(CONFIG_FILE_PATH, encoding='utf-8-sig')
         if 'settings' in config:
             app_config["apollo_conf_path"] = config['settings'].get("apollo_conf_path")
             app_config["steamgriddb_api_key"] = config['settings'].get("steamgriddb_api_key")
