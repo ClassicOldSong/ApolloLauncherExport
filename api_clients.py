@@ -324,7 +324,7 @@ class MetadataFetcher:
                         f"limit 5;" # Keep limit low for individual searches
                     )
                     json_bytes = igdb_wrapper_instance.api_request('games', api_query)
-                    games_data = json.loads(json_bytes.decode('utf-8'))
+                    games_data = json.loads(json_bytes.decode('utf-8-sig'))
 
                     if games_data:
                         highest_similarity_ratio = 0.0

@@ -95,11 +95,11 @@ def collect_data(apps_json: Path, state_json: Path):
     if not state_json.exists():
         raise FileNotFoundError(f"state.json not found at {state_json}")
 
-    with state_json.open(encoding="utf-8") as f:
+    with state_json.open(encoding="utf-8-sig") as f:
         host_uuid = json.load(f)["root"]["uniqueid"]
 
     app_map = {}
-    with apps_json.open(encoding="utf-8") as f:
+    with apps_json.open(encoding="utf-8-sig") as f:
         for app in json.load(f)["apps"]:
             name  = app.get("name")
             uuid  = app.get("uuid")
